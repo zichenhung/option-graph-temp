@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>選擇權四大基本部位損益圖</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Arial, "Noto Sans TC", sans-serif;
+      background: #fff;
+      color: #111;
+    }
+    main { max-width: 1200px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .note { margin: 0 0 18px; color: #555; line-height: 1.6; }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-weight: 700;
+    }
+    input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #bbb;
+      border-radius: 6px;
+      font-size: 16px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .card {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .card h2 { margin: 0 0 8px; font-size: 19px; }
+    .metrics {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    .chart-wrap { height: 300px; }
+    .legend-note {
+      margin-top: 18px;
+      padding-top: 12px;
+      border-top: 1px solid #ddd;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+    code { background: #f4f4f4; padding: 1px 4px; border-radius: 4px; }
+    @media (max-width: 850px) {
+      .controls, .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>選擇權四大基本部位：到期 Payoff 與淨損益</h1>
+  <p class="note">
+    橫軸為到期時標的價格 <b>S<sub>T</sub></b>；縱軸以「每 1 單位標的」計算。
+    實線是淨損益（含權利金），虛線是到期 Payoff（未含權利金）。
+  </p>
+
+  <section class="controls">
+    <label>
+      履約價 K
+      <input id="strike" type="number" min="0.01" step="1" value="100" />
+    </label>
+    <label>
+      Call 權利金 C
+      <input id="callPremium" type="number" min="0" step="0.5" value="10" />
+    </label>
+    <label>
+      Put 權利金 P
+      <input id="putPremium" type="number" min="0" step="0.5" value="8" />
+    </label>
+  </section>
+
+  <section class="grid">
+    <article class="card">
+      <h2>Long Call（買進買權 / Buy Call）</h2>
+      <div class="metrics" id="m-long-call"></div>
+      <div class="chart-wrap"><canvas id="longCall"></canvas></div>
+    </article>
+
+    <article class="card">
+      <h2>Long Put（買進賣權 / Buy Put）</h2>
+      <div class="metrics" id="m-long-put"></div>
+      <div class="chart-wrap"><canvas id="longPut"></canvas></div>
+    </article>
+
+    <article class="card">
+      <h2>Short Call（賣出買權 / Sell Call）</h2>
+      <div class="metrics" id="m-short-call"></div>
+      <div class="chart-wrap"><canvas id="shortCall"></canvas></div>
+    </article>
+
+    <article class="card">
+      <h2>Short Put（賣出賣權 / Sell Put）</h2>
+      <div class="metrics" id="m-short-put"></div>
+      <div class="chart-wrap"><canvas id="shortPut"></canvas></div>
+    </article>
+  </section>
+
+  <div class="legend-note">
+    <b>公式：</b><br>
+    Long Call payoff = <code>max(S_T − K, 0)</code>；Long Put payoff = <code>max(K − S_T, 0)</code>。<br>
+    Short 的 payoff = 對應 Long payoff 乘以 −1。<br>
+    Long 淨損益 = payoff − premium；Short 淨損益 = payoff + premium。<br><br>
+    <b>重要：</b>權利金使淨損益線相對 payoff 線做的是<b>垂直位移</b>，不是水平位移；
+    但因為損益平衡點必須滿足 P&amp;L = 0，所以 break-even 會在橫軸上移動。
+  </div>
+</main>
+
+<script>
+  const COLORS = {
+    profit: '#18864b',
+    loss: '#c43c35',
+    payoff: '#6f42c1',
+    marker: '#666',
+    grid: '#e5e5e5',
+    zero: '#999'
+  };
+
+  const markerPlugin = {
+    id: 'markers',
+    afterDraw(chart, args, opts) {
+      const {ctx, chartArea, scales} = chart;
+      if (!chartArea || !opts) return;
+
+      const drawVLine = (xValue, label, dash) => {
+        if (!Number.isFinite(xValue)) return;
+        if (xValue < scales.x.min || xValue > scales.x.max) return;
+        const x = scales.x.getPixelForValue(xValue);
+        ctx.save();
+        ctx.strokeStyle = COLORS.marker;
+        ctx.lineWidth = 1;
+        ctx.setLineDash(dash);
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#333';
+        ctx.font = '12px Arial';
+        ctx.fillText(label, x + 4, chartArea.top + 14);
+        ctx.restore();
+      };
+
+      drawVLine(opts.strike, 'K', [4, 4]);
+      drawVLine(opts.breakEven, 'BE', [2, 3]);
+    }
+  };
+
+  Chart.register(markerPlugin);
+
+  const chartMap = {};
+
+  function makeChart(canvasId) {
+    const ctx = document.getElementById(canvasId);
+    return new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: [
+          {
+            label: '淨損益 P&L',
+            data: [],
+            borderWidth: 3,
+            pointRadius: 0,
+            tension: 0,
+            segment: {
+              borderColor: seg => {
+                const y0 = seg.p0.parsed.y;
+                const y1 = seg.p1.parsed.y;
+                return (y0 >= 0 && y1 >= 0) ? COLORS.profit : COLORS.loss;
+              }
+            }
+          },
+          {
+            label: '到期 Payoff（未含權利金）',
+            data: [],
+            borderColor: COLORS.payoff,
+            borderWidth: 1.5,
+            borderDash: [7, 5],
+            pointRadius: 0,
+            tension: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: '到期標的價格 S_T' },
+            grid: { color: COLORS.grid }
+          },
+          y: {
+            title: { display: true, text: '每單位標的損益' },
+            grid: {
+              color: c => c.tick.value === 0 ? COLORS.zero : COLORS.grid,
+              lineWidth: c => c.tick.value === 0 ? 1.5 : 1
+            }
+          }
+        },
+        plugins: {
+          legend: { position: 'top' },
+          markers: { strike: 100, breakEven: 110 },
+          tooltip: {
+            callbacks: {
+              title: items => items.length ? `S_T = ${items[0].parsed.x.toFixed(2)}` : '',
+              label: item => `${item.dataset.label}: ${item.parsed.y.toFixed(2)}`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function buildSeries(type, K, C, P, sMax) {
+    const isCall = type.includes('call');
+    const isLong = type.startsWith('long');
+    const premium = isCall ? C : P;
+    const be = isCall ? K + premium : K - premium;
+
+    const xs = [];
+    const steps = 180;
+    for (let i = 0; i <= steps; i++) xs.push(sMax * i / steps);
+    xs.push(K);
+    if (be >= 0 && be <= sMax) xs.push(be);
+    const sorted = [...new Set(xs.map(v => Number(v.toFixed(8))))].sort((a,b) => a-b);
+
+    const payoff = [];
+    const pnl = [];
+
+    for (const ST of sorted) {
+      const longPayoff = isCall ? Math.max(ST - K, 0) : Math.max(K - ST, 0);
+      const positionPayoff = isLong ? longPayoff : -longPayoff;
+      const net = isLong ? (longPayoff - premium) : (premium - longPayoff);
+      payoff.push({x: ST, y: positionPayoff});
+      pnl.push({x: ST, y: net});
+    }
+
+    return {payoff, pnl, be};
+  }
+
+  function money(x) {
+    if (!Number.isFinite(x)) return '—';
+    return x.toFixed(2);
+  }
+
+  function setMetrics(id, items) {
+    document.getElementById(id).innerHTML = items
+      .map(([k,v]) => `<span><b>${k}</b> ${v}</span>`)
+      .join('');
+  }
+
+  function update() {
+    const K = Math.max(0.01, Number(document.getElementById('strike').value) || 100);
+    const C = Math.max(0, Number(document.getElementById('callPremium').value) || 0);
+    const P = Math.max(0, Number(document.getElementById('putPremium').value) || 0);
+
+    // 自動給出足夠寬的標的價格範圍，避免 K 或 break-even 跑出圖外。
+    const maxBE = Math.max(K + C, K - P, K);
+    const sMax = Math.max(2 * K, maxBE * 1.35, 10);
+
+    const configs = {
+      longCall:  { type: 'long_call',  metrics: 'm-long-call'  },
+      longPut:   { type: 'long_put',   metrics: 'm-long-put'   },
+      shortCall: { type: 'short_call', metrics: 'm-short-call' },
+      shortPut:  { type: 'short_put',  metrics: 'm-short-put'  }
+    };
+
+    const series = {};
+    let globalMin = 0;
+    let globalMax = 0;
+
+    for (const [key, cfg] of Object.entries(configs)) {
+      series[key] = buildSeries(cfg.type, K, C, P, sMax);
+      for (const d of [...series[key].pnl, ...series[key].payoff]) {
+        globalMin = Math.min(globalMin, d.y);
+        globalMax = Math.max(globalMax, d.y);
+      }
+    }
+
+    const pad = Math.max(5, (globalMax - globalMin) * 0.08);
+    const yMin = globalMin - pad;
+    const yMax = globalMax + pad;
+
+    for (const [key, cfg] of Object.entries(configs)) {
+      const chart = chartMap[key];
+      const s = series[key];
+      chart.data.datasets[0].data = s.pnl;
+      chart.data.datasets[1].data = s.payoff;
+      chart.options.scales.x.min = 0;
+      chart.options.scales.x.max = sMax;
+      chart.options.scales.y.min = yMin;
+      chart.options.scales.y.max = yMax;
+      chart.options.plugins.markers = {
+        strike: K,
+        breakEven: s.be >= 0 ? s.be : NaN
+      };
+      chart.update('none');
+    }
+
+    const putBE = K - P;
+    const putBEText = putBE >= 0 ? money(putBE) : '無正價格解';
+
+    setMetrics('m-long-call', [
+      ['BE:', money(K + C)], ['最大獲利:', '理論無限'], ['最大損失:', money(C)]
+    ]);
+    setMetrics('m-short-call', [
+      ['BE:', money(K + C)], ['最大獲利:', money(C)], ['最大損失:', '理論無限']
+    ]);
+    setMetrics('m-long-put', [
+      ['BE:', putBEText], ['最大淨損益:', money(K - P)], ['最大損失:', money(P)]
+    ]);
+    setMetrics('m-short-put', [
+      ['BE:', putBEText], ['最大獲利:', money(P)], ['最大損失:', money(Math.max(K - P, 0))]
+    ]);
+  }
+
+  chartMap.longCall = makeChart('longCall');
+  chartMap.longPut = makeChart('longPut');
+  chartMap.shortCall = makeChart('shortCall');
+  chartMap.shortPut = makeChart('shortPut');
+
+  ['strike', 'callPremium', 'putPremium'].forEach(id => {
+    document.getElementById(id).addEventListener('input', update);
+  });
+
+  update();
+</script>
+</body>
+</html>
